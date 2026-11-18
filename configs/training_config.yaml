@@ -1,0 +1,37 @@
+# Configuration for AREX-2 MTP Draft Model Training
+model:
+  target_model_name: "BAAI/AREX-2"
+  target_gguf_path: "/mnt/skhynix/AI/models/bartowski/BAAI_AREX-2-GGUF/BAAI_AREX-2-Q5_K_M.gguf"
+  base_mtp_gguf_path: "/mnt/skhynix/AI/models/qwen3.8-27b/mtp-Qwen3.8-27B-Q4_0.gguf"
+  output_dir: "/home/tieubaoca/AI/train_arex_mtp/output"
+  cache_dir: "/home/tieubaoca/AI/train_arex_mtp/data/cached_states"
+  raw_data_path: "/home/tieubaoca/AI/train_arex_mtp/data/raw/seed_prompts.jsonl"
+
+architecture:
+  hidden_size: 5120
+  intermediate_size: 17408
+  num_attention_heads: 24
+  num_key_value_heads: 4
+  head_dim: 256
+  vocab_size: 248320
+  rms_norm_eps: 1e-6
+  rope_theta: 10000000.0
+  rotary_dim: 64
+
+training:
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  learning_rate: 0.0001
+  min_learning_rate: 0.00001
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  num_epochs: 3
+  max_seq_len: 32
+  target_samples: 30000
+  device: "cuda"  # PyTorch ROCm maps MI50 to cuda:0
+  mixed_precision: "float16"  # MI50 (gfx906) has native FP16 hardware acceleration
+
+export:
+  output_f16_path: "/home/tieubaoca/AI/train_arex_mtp/output/mtp-BAAI_AREX-2-F16.gguf"
+  output_q4_path: "/mnt/skhynix/AI/models/bartowski/BAAI_AREX-2-GGUF/mtp-BAAI_AREX-2-Q4_0.gguf"
+  llama_quantize_bin: "/home/tieubaoca/AI/llama.cpp/build/bin/llama-quantize"
