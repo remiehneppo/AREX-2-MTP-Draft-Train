@@ -8,7 +8,8 @@ Chạy lệnh sau từ thư mục gốc repo.
 
 ```bash
 set -o pipefail
-bash scripts/run_pipeline.sh 2>&1 | tee /tmp/arex-mtp-train.log
+mkdir -p output
+bash scripts/run_pipeline.sh 2>&1 | tee output/arex-mtp-train.log
 ```
 
 Pipeline dùng cache teacher hiện có nếu file cache có dữ liệu. Hãy kiểm tra cache và manifest thuộc cùng lượt trích, đồng thời khớp model đích trong config. Một lượt chạy ghi checkpoint và GGUF vào các tên cố định trong `output/`. Lưu bản cần giữ sang đường dẫn khác trước khi chạy lại.
@@ -23,16 +24,16 @@ Pipeline dùng cache teacher hiện có nếu file cache có dữ liệu. Hãy k
 
 ```bash
 export LLAMA_CPP_DIR="$(realpath ../llama.cpp)"
-export MTP_PYTHON="$(realpath ../server-whisper-rocm/.venv/bin/python)"
-export LD_LIBRARY_PATH="$LLAMA_CPP_DIR/build/bin:/opt/rocm/lib:${LD_LIBRARY_PATH:-}"
+export MTP_PYTHON=python3
+export PYTHONPATH="$LLAMA_CPP_DIR/gguf-py${PYTHONPATH:+:$PYTHONPATH}"
+export LD_LIBRARY_PATH="$LLAMA_CPP_DIR/build/bin${ROCM_PATH:+:$ROCM_PATH/lib}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-ls -l /dev/kfd /dev/dri/render*
-/opt/rocm/bin/rocm-smi --showproductname --showmeminfo vram
+rocm-smi --showproductname --showmeminfo vram
 "$MTP_PYTHON" -c 'import torch; print(torch.__version__, torch.version.hip); print(torch.ones(1, device="cuda"))'
 "$LLAMA_CPP_DIR/build/bin/llama-server" --list-devices
 ```
 
-Các module Python hiện có đường dẫn `gguf-py` mặc định cho máy này. Khi dùng checkout khác, thêm thư mục `gguf-py` tương ứng vào `PYTHONPATH` và kiểm tra Python đang import đúng phiên bản.
+Kích hoạt môi trường Python ROCm trước khi chạy. Nếu llama.cpp nằm ở vị trí khác, đặt `LLAMA_CPP_DIR` theo checkout của bạn. Script tự thêm `gguf-py` vào `PYTHONPATH`. Khi gọi module Python riêng, giữ cấu hình `PYTHONPATH` như ví dụ hoặc cài package `gguf` từ checkout tương ứng.
 
 ## Cấu hình và artifact
 
@@ -44,12 +45,17 @@ Các module Python hiện có đường dẫn `gguf-py` mặc định cho máy n
 | `model.base_mtp_gguf_path` | MTP Qwen3.8-27B Q4_0 làm warm-start cho 15 tensor và cung cấp metadata kiến trúc sidecar |
 | `model.raw_data_path` | JSONL seed, mỗi dòng có trường `prompt` |
 
+Mặc định, đặt hai file GGUF nguồn trong `models/` theo tên trong YAML. Thư mục này được Git bỏ qua. Nếu các file nằm nơi khác, đặt `MTP_TEACHER_GGUF` và `MTP_WARM_START_GGUF` trong môi trường của bạn. [Teacher GGUF](https://huggingface.co/bartowski/BAAI_AREX-2-GGUF) · [Qwen3.8-27B nguồn](https://huggingface.co/Qwen/Qwen3.8-27B)
+
 Các mục `training`, `architecture` và `export` trong YAML mô tả cấu hình cũ. Entry point hiện tại là [run_pipeline.sh](scripts/run_pipeline.sh), với các tùy chọn trong bảng.
 
 | Biến môi trường | Mặc định | Tác dụng |
 |---|---|---|
 | `LLAMA_CPP_DIR` | `../llama.cpp` | Checkout chứa header và `build/bin` |
-| `MTP_PYTHON` | Python của `../server-whisper-rocm/.venv` | Môi trường Python dùng cho train và export |
+| `MTP_PYTHON` | `python3` | Môi trường Python dùng cho train và export |
+| `ROCM_PATH` | Theo môi trường | Thêm thư mục `lib` của ROCm vào đường dẫn thư viện khi có giá trị |
+| `MTP_TEACHER_GGUF` | `model.target_gguf_path` | Đường dẫn teacher do người chạy cung cấp |
+| `MTP_WARM_START_GGUF` | `model.base_mtp_gguf_path` | Đường dẫn GGUF warm-start do người chạy cung cấp |
 | `CXX` | `g++` | Compiler cho extractor |
 | `HSA_OVERRIDE_GFX_VERSION` | `9.0.6` | Cấu hình ROCm của lượt chạy |
 | `MTP_TEACHER_CACHE` | `data/cached_states/teacher.bin` | Cache teacher hoặc tên cache mới cần tạo |
@@ -111,8 +117,8 @@ Token cuối có thể dùng làm nhãn mà chưa cần decode để lấy hidde
 Dùng hai lệnh dưới đây khi cần đổi tên artifact hoặc xuất lại checkpoint. Đọc đường dẫn model từ YAML trước khi chạy phần train, export hoặc inference.
 
 ```bash
-export TEACHER="$("$MTP_PYTHON" -c 'import yaml; print(yaml.safe_load(open("configs/training_config.yaml"))["model"]["target_gguf_path"])')"
-export WARM_START="$("$MTP_PYTHON" -c 'import yaml; print(yaml.safe_load(open("configs/training_config.yaml"))["model"]["base_mtp_gguf_path"])')"
+export TEACHER="${MTP_TEACHER_GGUF:-$("$MTP_PYTHON" -c 'import yaml; print(yaml.safe_load(open("configs/training_config.yaml"))["model"]["target_gguf_path"])')}"
+export WARM_START="${MTP_WARM_START_GGUF:-$("$MTP_PYTHON" -c 'import yaml; print(yaml.safe_load(open("configs/training_config.yaml"))["model"]["base_mtp_gguf_path"])')}"
 ```
 
 ```bash

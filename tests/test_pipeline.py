@@ -1,12 +1,9 @@
 import os
-import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 import yaml
 import torch
-
-# Add project root and gguf-py
-sys.path.insert(0, "/home/tieubaoca/AI/train_arex_mtp")
-sys.path.insert(0, "/home/tieubaoca/AI/llama.cpp/gguf-py")
 
 from src.model_mtp import Qwen35MTPBlock, RotaryEmbedding, load_warmstart_from_gguf
 from src.dataset import build_synthetic_agent_dataset, load_dataset_prompts
@@ -14,7 +11,7 @@ from src.dataset import build_synthetic_agent_dataset, load_dataset_prompts
 
 class TestMTPPipeline(unittest.TestCase):
     def setUp(self):
-        self.config_path = "/home/tieubaoca/AI/train_arex_mtp/configs/training_config.yaml"
+        self.config_path = Path(__file__).resolve().parents[1] / "configs/training_config.yaml"
         with open(self.config_path, "r") as f:
             self.cfg = yaml.safe_load(f)
 
@@ -88,7 +85,7 @@ class TestMTPPipeline(unittest.TestCase):
             head_dim=arch["head_dim"],
             eps=float(arch["rms_norm_eps"])
         )
-        base_mtp_path = self.cfg["model"]["base_mtp_gguf_path"]
+        base_mtp_path = os.environ.get("MTP_WARM_START_GGUF", self.cfg["model"]["base_mtp_gguf_path"])
         if os.path.exists(base_mtp_path):
             load_warmstart_from_gguf(model, base_mtp_path)
             # Verify weights are non-zero
@@ -97,14 +94,13 @@ class TestMTPPipeline(unittest.TestCase):
 
     def test_06_dataset_generation(self):
         # Verify synthetic prompt generator produces diverse items
-        test_out = "/tmp/test_prompts.jsonl"
-        samples = build_synthetic_agent_dataset(test_out, count=50)
-        self.assertEqual(len(samples), 50)
-        loaded = load_dataset_prompts(test_out)
-        self.assertEqual(len(loaded), 50)
-        self.assertTrue("prompt" in loaded[0])
-        if os.path.exists(test_out):
-            os.remove(test_out)
+        with TemporaryDirectory() as directory:
+            test_out = os.path.join(directory, "test_prompts.jsonl")
+            samples = build_synthetic_agent_dataset(test_out, count=50)
+            self.assertEqual(len(samples), 50)
+            loaded = load_dataset_prompts(test_out)
+            self.assertEqual(len(loaded), 50)
+            self.assertIn("prompt", loaded[0])
 
 
 if __name__ == "__main__":

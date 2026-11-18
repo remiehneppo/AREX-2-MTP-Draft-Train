@@ -1,13 +1,12 @@
 import os
-import sys
 import subprocess
+import shutil
+from pathlib import Path
 import argparse
 from typing import Optional
 import torch
 import numpy as np
 
-# Add gguf-py to path
-sys.path.insert(0, "/home/tieubaoca/AI/llama.cpp/gguf-py")
 import gguf
 
 
@@ -17,7 +16,7 @@ def export_mtp_to_gguf(
     target_gguf_path: Optional[str],
     output_f16_path: str,
     output_q4_path: str,
-    llama_quantize_bin: str = "/home/tieubaoca/AI/llama.cpp/build/bin/llama-quantize",
+    llama_quantize_bin: str = "llama-quantize",
     keep_f16: bool = False,
 ):
     """
@@ -59,8 +58,8 @@ def export_mtp_to_gguf(
     }
 
     # Ensure output directory exists
-    os.makedirs(os.path.dirname(output_f16_path), exist_ok=True)
-    os.makedirs(os.path.dirname(output_q4_path), exist_ok=True)
+    Path(output_f16_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_q4_path).parent.mkdir(parents=True, exist_ok=True)
 
     # Initialize GGUF Writer with qwen35 architecture
     writer = gguf.GGUFWriter(output_f16_path, arch="qwen35")
@@ -146,14 +145,11 @@ def export_mtp_to_gguf(
     print(">>> Xuất file F16 thành công!")
 
     # 3. Quantize to Q4_0
-    if os.path.exists(llama_quantize_bin):
+    quantize = shutil.which(llama_quantize_bin)
+    if quantize:
         print(f">>> Đang lượng tử hóa sang Q4_0: {output_q4_path}...")
-        env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = f"/home/tieubaoca/AI/llama.cpp/build/bin:/opt/rocm/lib:{env.get('LD_LIBRARY_PATH', '')}"
-        env["HSA_OVERRIDE_GFX_VERSION"] = "9.0.6"
-
         cmd = [
-            llama_quantize_bin,
+            quantize,
             "--allow-requantize",
             "--leave-output-tensor",
             "--token-embedding-type", "q5_k",
@@ -161,7 +157,7 @@ def export_mtp_to_gguf(
             output_q4_path,
             "Q4_0"
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
             raise RuntimeError(f"llama-quantize thất bại (exit code {res.returncode}):\n{res.stderr}\n{res.stdout}")
 
@@ -181,7 +177,7 @@ if __name__ == "__main__":
     parser.add_argument("--target-gguf", default=None, help="Path to AREX-2 target GGUF file")
     parser.add_argument("--out-f16", required=True, help="Output path for F16 GGUF")
     parser.add_argument("--out-q4", required=True, help="Output path for Q4_0 GGUF")
-    parser.add_argument("--quantize-bin", default="/home/tieubaoca/AI/llama.cpp/build/bin/llama-quantize")
+    parser.add_argument("--quantize-bin", default="llama-quantize")
     parser.add_argument("--keep-f16", action="store_true")
     args = parser.parse_args()
 

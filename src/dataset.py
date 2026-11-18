@@ -1,12 +1,13 @@
 import os
 import json
 import subprocess
+import shutil
 import itertools
 from typing import List, Dict, Optional
 
-DEFAULT_TOKENIZE_BIN = "/home/tieubaoca/AI/llama.cpp/build/bin/llama-tokenize"
-DEFAULT_MODEL_GGUF = "/mnt/skhynix/AI/models/bartowski/BAAI_AREX-2-GGUF/BAAI_AREX-2-Q5_K_M.gguf"
-DEFAULT_LIB_PATH = "/home/tieubaoca/AI/llama.cpp/build/bin:/opt/rocm/lib"
+DEFAULT_TOKENIZE_BIN = "llama-tokenize"
+DEFAULT_MODEL_GGUF = "models/BAAI_AREX-2-Q5_K_M.gguf"
+DEFAULT_LIB_PATH = ""
 
 
 def tokenize_text(
@@ -18,16 +19,17 @@ def tokenize_text(
     """
     Tokenizes text directly using llama-tokenize and the target model vocab.
     """
-    if not os.path.exists(tokenize_bin) or not os.path.exists(model_path):
+    tokenizer = shutil.which(tokenize_bin)
+    if not tokenizer or not os.path.exists(model_path):
         # Fallback to UTF-8 byte encoding as pseudo-token representation if binary not available
         return list(text.encode("utf-8"))
 
     env = os.environ.copy()
-    env["LD_LIBRARY_PATH"] = f"{lib_path}:{env.get('LD_LIBRARY_PATH', '')}"
-    env["HSA_OVERRIDE_GFX_VERSION"] = "9.0.6"
+    if lib_path:
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, (lib_path, env.get("LD_LIBRARY_PATH"))))
 
     cmd = [
-        tokenize_bin,
+        tokenizer,
         "-m", model_path,
         "-p", text,
         "--ids"
@@ -166,5 +168,5 @@ def load_dataset_prompts(file_path: str) -> List[Dict]:
 
 
 if __name__ == "__main__":
-    out_file = "/home/tieubaoca/AI/train_arex_mtp/data/raw/seed_prompts.jsonl"
+    out_file = "data/raw/seed_prompts.jsonl"
     build_synthetic_agent_dataset(out_file, count=500)

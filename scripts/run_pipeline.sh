@@ -4,12 +4,13 @@ set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$project_dir"
 llama_dir=${LLAMA_CPP_DIR:-"$project_dir/../llama.cpp"}
-python_bin=${MTP_PYTHON:-"$project_dir/../server-whisper-rocm/.venv/bin/python"}
-export LD_LIBRARY_PATH="$llama_dir/build/bin:/opt/rocm/lib:${LD_LIBRARY_PATH:-}"
+python_bin=${MTP_PYTHON:-python3}
+export LD_LIBRARY_PATH="$llama_dir/build/bin${ROCM_PATH:+:$ROCM_PATH/lib}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PYTHONPATH="$llama_dir/gguf-py${PYTHONPATH:+:$PYTHONPATH}"
 export HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-9.0.6}
 export GGML_CUDA_NO_PINNED=1
 
-mapfile -t model_paths < <("$python_bin" - <<'PY'
+config_paths=$("$python_bin" - <<'PY'
 import yaml
 with open("configs/training_config.yaml") as config_file:
     models = yaml.safe_load(config_file)["model"]
@@ -17,9 +18,16 @@ for key in ("target_gguf_path", "base_mtp_gguf_path", "raw_data_path"):
     print(models[key])
 PY
 )
-teacher=${model_paths[0]}
-warm_start=${model_paths[1]}
+mapfile -t model_paths <<<"$config_paths"
+teacher=${MTP_TEACHER_GGUF:-${model_paths[0]}}
+warm_start=${MTP_WARM_START_GGUF:-${model_paths[1]}}
 seed_prompts=${model_paths[2]}
+for model in "$teacher" "$warm_start"; do
+    if [[ ! -r "$model" ]]; then
+        printf 'Cannot read model %s. See README.md for model path configuration.\n' "$model" >&2
+        exit 1
+    fi
+done
 cache_dir=data/cached_states
 output_dir=output
 mkdir -p "$cache_dir" "$output_dir"

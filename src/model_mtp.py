@@ -1,13 +1,9 @@
 import math
-import sys
-import os
 from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Add gguf-py to path
-sys.path.insert(0, "/home/tieubaoca/AI/llama.cpp/gguf-py")
 import gguf
 
 

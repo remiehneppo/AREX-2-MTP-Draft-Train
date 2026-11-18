@@ -1,11 +1,11 @@
 # Configuration for AREX-2 MTP Draft Model Training
 model:
   target_model_name: "BAAI/AREX-2"
-  target_gguf_path: "/mnt/skhynix/AI/models/bartowski/BAAI_AREX-2-GGUF/BAAI_AREX-2-Q5_K_M.gguf"
-  base_mtp_gguf_path: "/mnt/skhynix/AI/models/qwen3.8-27b/mtp-Qwen3.8-27B-Q4_0.gguf"
-  output_dir: "/home/tieubaoca/AI/train_arex_mtp/output"
-  cache_dir: "/home/tieubaoca/AI/train_arex_mtp/data/cached_states"
-  raw_data_path: "/home/tieubaoca/AI/train_arex_mtp/data/raw/seed_prompts.jsonl"
+  target_gguf_path: "models/BAAI_AREX-2-Q5_K_M.gguf"
+  base_mtp_gguf_path: "models/mtp-Qwen3.8-27B-Q4_0.gguf"
+  output_dir: "output"
+  cache_dir: "data/cached_states"
+  raw_data_path: "data/raw/seed_prompts.jsonl"
 
 architecture:
   hidden_size: 5120
@@ -32,6 +32,6 @@ training:
   mixed_precision: "float16"  # MI50 (gfx906) has native FP16 hardware acceleration
 
 export:
-  output_f16_path: "/home/tieubaoca/AI/train_arex_mtp/output/mtp-BAAI_AREX-2-F16.gguf"
-  output_q4_path: "/mnt/skhynix/AI/models/bartowski/BAAI_AREX-2-GGUF/mtp-BAAI_AREX-2-Q4_0.gguf"
-  llama_quantize_bin: "/home/tieubaoca/AI/llama.cpp/build/bin/llama-quantize"
+  output_f16_path: "output/mtp-BAAI_AREX-2-F16.gguf"
+  output_q4_path: "output/mtp-BAAI_AREX-2-Q4_0.gguf"
+  llama_quantize_bin: "llama-quantize"

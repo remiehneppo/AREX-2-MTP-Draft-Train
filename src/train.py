@@ -1,5 +1,4 @@
 import os
-import sys
 import glob
 import math
 import yaml
@@ -9,11 +8,10 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from typing import List, Dict, Optional, Iterator
 
-sys.path.insert(0, "/home/tieubaoca/AI/train_arex_mtp")
-from src.model_mtp import Qwen35MTPBlock, load_warmstart_from_gguf
-
-sys.path.insert(0, "/home/tieubaoca/AI/llama.cpp/gguf-py")
-import gguf
+if __package__:
+    from .model_mtp import Qwen35MTPBlock, load_warmstart_from_gguf
+else:
+    from model_mtp import Qwen35MTPBlock, load_warmstart_from_gguf
 
 
 class CachedHiddenStateDataset(Dataset):
@@ -274,5 +272,5 @@ def train_mtp(config_path: str):
 
 
 if __name__ == "__main__":
-    cfg_file = "/home/tieubaoca/AI/train_arex_mtp/configs/training_config.yaml"
+    cfg_file = "configs/training_config.yaml"
     train_mtp(cfg_file)
