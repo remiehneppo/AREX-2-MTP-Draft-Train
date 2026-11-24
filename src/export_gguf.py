@@ -18,6 +18,7 @@ def export_mtp_to_gguf(
     output_q4_path: str,
     llama_quantize_bin: str = "llama-quantize",
     keep_f16: bool = False,
+    share_target_weights: bool = False,
 ):
     """
     Combines trained PyTorch MTP weights with GGUF metadata from base MTP and
@@ -34,6 +35,24 @@ def export_mtp_to_gguf(
         print(f">>> Đang đọc shared weights từ target model: {target_gguf_path}")
         target_reader = gguf.GGUFReader(target_gguf_path)
         target_tensor_map = {t.name: t for t in target_reader.tensors}
+
+    if share_target_weights:
+        if target_reader is None:
+            raise ValueError("--share-target-weights requires a readable --target-gguf")
+        missing = {"token_embd.weight", "output.weight", "output_norm.weight"} - target_tensor_map.keys()
+        if missing:
+            raise ValueError(f"Target GGUF is missing required tensors: {', '.join(sorted(missing))}")
+        embedding = target_tensor_map["token_embd.weight"]
+        output = target_tensor_map["output.weight"]
+        if len(embedding.shape) != 2 or tuple(embedding.shape) != tuple(output.shape):
+            raise ValueError("Target embedding and output shapes must match")
+        hidden_size, vocab_size = map(int, embedding.shape)
+        base_hidden_size = base_reader.fields["qwen35.embedding_length"].contents()
+        target_vocab_size = len(target_reader.fields["tokenizer.ggml.tokens"].data)
+        if hidden_size != base_hidden_size or vocab_size != target_vocab_size:
+            raise ValueError("Target embedding dimensions must match the MTP width and target tokenizer")
+        if "d2t" in base_tensor_map:
+            raise ValueError("Compact export requires a full-vocabulary base MTP. Use the d2t export pipeline for trimmed heads.")
 
     print(f">>> Đang tải trọng số MTP PyTorch: {mtp_weights_path}")
     state_dict = torch.load(mtp_weights_path, map_location="cpu", weights_only=True)
@@ -66,8 +85,9 @@ def export_mtp_to_gguf(
 
     # Copy architecture metadata from base_reader using contents()
     print(">>> Đang sao chép metadata kiến trúc...")
+    replaced_metadata = {"general.architecture", "qwen35.block_count", "qwen35.nextn_predict_layers"}
     for field in base_reader.fields.values():
-        if field.name == "general.architecture" or field.name.startswith("GGUF."):
+        if field.name in replaced_metadata or field.name.startswith("GGUF."):
             continue
         if target_reader is not None and field.name.startswith("tokenizer."):
             continue
@@ -103,8 +123,10 @@ def export_mtp_to_gguf(
             f16_data = gguf.quants.dequantize(base_t.data, base_t.tensor_type).astype(dtype)
             writer.add_tensor(gguf_name, f16_data)
 
-    # 2. Add shared embedding & lm_head tensors (zero-copy quantized raw data)
-    shared_tensors = ["token_embd.weight", "output.weight", "output_norm.weight"]
+    # Keep the output norm and any vocabulary weights required by the sidecar.
+    shared_tensors = ["output_norm.weight"]
+    if not share_target_weights:
+        shared_tensors = ["token_embd.weight", "output.weight", *shared_tensors]
     for s_name in shared_tensors:
         if s_name in target_tensor_map:
             print(f">>> Đang sao chép shared tensor từ AREX-2: {s_name}")
@@ -148,15 +170,10 @@ def export_mtp_to_gguf(
     quantize = shutil.which(llama_quantize_bin)
     if quantize:
         print(f">>> Đang lượng tử hóa sang Q4_0: {output_q4_path}...")
-        cmd = [
-            quantize,
-            "--allow-requantize",
-            "--leave-output-tensor",
-            "--token-embedding-type", "q5_k",
-            output_f16_path,
-            output_q4_path,
-            "Q4_0"
-        ]
+        cmd = [quantize, "--allow-requantize"]
+        if not share_target_weights:
+            cmd.extend(["--leave-output-tensor", "--token-embedding-type", "q5_k"])
+        cmd.extend([output_f16_path, output_q4_path, "Q4_0"])
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
             raise RuntimeError(f"llama-quantize thất bại (exit code {res.returncode}):\n{res.stderr}\n{res.stdout}")
@@ -179,6 +196,8 @@ if __name__ == "__main__":
     parser.add_argument("--out-q4", required=True, help="Output path for Q4_0 GGUF")
     parser.add_argument("--quantize-bin", default="llama-quantize")
     parser.add_argument("--keep-f16", action="store_true")
+    parser.add_argument("--share-target-weights", action="store_true",
+                        help="Omit embedding and LM head. Requires a llama.cpp loader with MTP target-weight sharing.")
     args = parser.parse_args()
 
     export_mtp_to_gguf(
@@ -189,4 +208,5 @@ if __name__ == "__main__":
         output_q4_path=args.out_q4,
         llama_quantize_bin=args.quantize_bin,
         keep_f16=args.keep_f16,
+        share_target_weights=args.share_target_weights,
     )

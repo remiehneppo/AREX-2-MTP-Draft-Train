@@ -103,5 +103,24 @@ class TestMTPPipeline(unittest.TestCase):
             self.assertIn("prompt", loaded[0])
 
 
+class TestRollout(unittest.TestCase):
+    def test_rollout_feeds_draft_hidden_and_counts_only_matching_prefixes(self):
+        from src.train_rollout import rollout
+
+        def draft(states, embeddings):
+            return states.roll(1, dims=-1)
+
+        hidden = torch.tensor([[1., 0., 0.], [0., 0., 1.], [0., 0., 0.], [0., 0., 0.]],
+                              requires_grad=True)
+        loss, counts = rollout(
+            draft, torch.eye(3, dtype=torch.float16), hidden, torch.zeros_like(hidden),
+            torch.tensor([1, 2, 0, 1]), [0, 1], depth=3,
+        )
+        self.assertEqual(counts.tolist(), [1, 1, 1])
+        loss.backward()
+        self.assertTrue(torch.isfinite(hidden.grad).all())
+        self.assertGreater(hidden.grad[0].abs().sum().item(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

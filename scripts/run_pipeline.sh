@@ -54,7 +54,8 @@ PY
     "${CXX:-g++}" -O2 -std=c++17 -I"$llama_dir/include" -I"$llama_dir/src" \
         -I"$llama_dir/ggml/include" src/extract_teacher.cpp -L"$llama_dir/build/bin" \
         -lllama -o "$work_dir/extract_teacher"
-    "$work_dir/extract_teacher" "$teacher" "$work_dir/prompts.txt" "$work_dir/teacher.bin"
+    "$work_dir/extract_teacher" "$teacher" "$work_dir/prompts.txt" "$work_dir/teacher.bin" \
+        "${MTP_MAX_PROMPT_TOKENS:-2048}"
     cp "$work_dir/prompts.txt" "$prompt_manifest"
     mv "$work_dir/teacher.bin" "$cache"
 fi
@@ -67,8 +68,14 @@ fi
     --warm-start "$warm_start" "${previous[@]}" --output "$output_dir/teacher_mtp.pt" \
     --epochs "${MTP_EPOCHS:-4}" --learning-rate "${MTP_LEARNING_RATE:-3e-6}"
 
+export_name=mtp-BAAI_AREX-2-teacher
+export_options=(--keep-f16)
+if [[ "${MTP_SHARE_TARGET_WEIGHTS:-0}" == 1 ]]; then
+    export_name+=-shared
+    export_options+=(--share-target-weights)
+fi
 "$python_bin" -m src.export_gguf --weights "$output_dir/teacher_mtp.pt" \
-    --base-gguf "$warm_start" --target-gguf "$teacher" --keep-f16 \
-    --out-f16 "$output_dir/mtp-BAAI_AREX-2-teacher-F16.gguf" \
-    --out-q4 "$output_dir/mtp-BAAI_AREX-2-teacher-Q4_0.gguf" \
+    --base-gguf "$warm_start" --target-gguf "$teacher" "${export_options[@]}" \
+    --out-f16 "$output_dir/$export_name-F16.gguf" \
+    --out-q4 "$output_dir/$export_name-Q4_0.gguf" \
     --quantize-bin "$llama_dir/build/bin/llama-quantize"

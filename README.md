@@ -56,15 +56,17 @@ Các mục `training`, `architecture` và `export` trong YAML mô tả cấu hì
 | `ROCM_PATH` | Theo môi trường | Thêm thư mục `lib` của ROCm vào đường dẫn thư viện khi có giá trị |
 | `MTP_TEACHER_GGUF` | `model.target_gguf_path` | Đường dẫn teacher do người chạy cung cấp |
 | `MTP_WARM_START_GGUF` | `model.base_mtp_gguf_path` | Đường dẫn GGUF warm-start do người chạy cung cấp |
+| `MTP_SHARE_TARGET_WEIGHTS` | `0` | Đặt thành `1` để xuất sidecar `-shared` dùng chung embedding và LM head với teacher |
 | `CXX` | `g++` | Compiler cho extractor |
 | `HSA_OVERRIDE_GFX_VERSION` | `9.0.6` | Cấu hình ROCm của lượt chạy |
 | `MTP_TEACHER_CACHE` | `data/cached_states/teacher.bin` | Cache teacher hoặc tên cache mới cần tạo |
 | `MTP_PROMPT_MANIFEST` | `<cache>.prompts.txt` | Danh sách prompt theo đúng thứ tự record |
 | `MTP_PROMPT_COUNT` | `64` | Giới hạn số prompt khi tạo cache. Sau khi bỏ biến thể lặp, seed hiện tại cho 45 prompt |
+| `MTP_MAX_PROMPT_TOKENS` | `2048` | Giới hạn prompt theo tokenizer khi tạo cache mới |
 | `MTP_EPOCHS` | `4` | Số epoch lượt huấn luyện chính |
 | `MTP_LEARNING_RATE` | `3e-6` | Learning rate lượt huấn luyện chính |
 
-Để trích lại bằng seed hoặc model đích mới, dùng tên cache mới. Thay đổi `MTP_PROMPT_COUNT` chỉ có hiệu lực khi trích cache.
+Để trích lại bằng seed hoặc model đích mới, dùng tên cache mới. Thay đổi `MTP_PROMPT_COUNT` và `MTP_MAX_PROMPT_TOKENS` chỉ có hiệu lực khi trích cache.
 
 ```bash
 MTP_TEACHER_CACHE=data/cached_states/teacher-v2.bin \
@@ -84,9 +86,34 @@ bash scripts/run_pipeline.sh
 ## Từ prompt đến batch huấn luyện
 
 1. **Chọn prompt.** Script bỏ tiền tố `[Variant N]`, khử trùng lặp, xáo trộn với seed 42, rồi lưu một prompt trên mỗi dòng. Prompt tự chuẩn bị cần là văn bản một dòng để khớp cách extractor đọc.
-2. **Sinh trace.** [Extractor C++](src/extract_teacher.cpp) nạp AREX-2, reset bộ nhớ ngữ cảnh giữa các prompt, token hóa prompt và sinh tối đa 40 token bằng argmax. Nó dừng sớm nếu gặp EOG. Context của extractor là 512 token và prompt tối đa 192 token sau token hóa. Extractor lấy hidden state từ API nextn của llama.cpp tại mỗi token đã decode.
+2. **Sinh trace.** [Extractor C++](src/extract_teacher.cpp) nạp AREX-2, reset bộ nhớ ngữ cảnh giữa các prompt, token hóa prompt và sinh tối đa 40 token bằng argmax. Nó dừng sớm nếu gặp EOG. Ngân sách prompt mặc định là 2.048 token, cộng 40 token dành cho continuation. Prefill chạy theo batch tối đa 256 token và giữ KV cache xuyên suốt cùng một prompt. Extractor lưu hidden state nextn theo thứ tự token. Nếu vượt giới hạn, log ghi số dòng và số token để người chạy chuẩn bị lại prompt.
 3. **Chia validation theo họ prompt.** [Trainer](src/train_teacher.py) gom các biến thể seed cùng chủ đề vào một nhóm, xáo trộn nhóm với seed 42 và lấy khoảng 20% số nhóm cho validation, tối thiểu 4 nhóm. Cần ít nhất 12 nhóm có continuation từ 2 token trở lên.
 4. **Căn hàng cho MTP.** Tại vị trí `j`, runtime ghép `hidden[j-1]` với embedding của `token[j]` rồi dự đoán `token[j+1]`. Hàng đầu dùng hidden toàn 0. Ví dụ, với `A B C`, khối MTP nhận hidden sau `A` và embedding `B`, rồi dự đoán `C`. Prefix tham gia causal attention. Nhãn bắt đầu tại token continuation đầu tiên, nghĩa là hàng cuối của prompt dùng để dự đoán nhãn đầu tiên.
+
+### Thu thập ngữ cảnh từ session OMP và Pi
+
+Chạy [crawler session](scripts/crawl_omp_arex2.py) từ thư mục gốc repo.
+
+```bash
+python3 scripts/crawl_omp_arex2.py --dry-run
+python3 scripts/crawl_omp_arex2.py --source omp --output data/cached_states/omp-context-v2.jsonl
+python3 scripts/crawl_omp_arex2.py --source pi --output data/cached_states/pi-context-v2.jsonl
+```
+
+Mỗi dòng là ngữ cảnh trước một lượt assistant `local/arex-2`. `context_entries` giữ các message và sự kiện ngữ cảnh trên nhánh tổ tiên của lượt đó, gồm argument và ID của tool call, tool result, nội dung system và thông tin tool nếu log có, cùng các sự kiện compaction, reset, context edit và custom message như skill prompt. Nội dung của lượt assistant đích nằm ngoài prefix. `target_entry_id` và `target_metadata` giúp đối chiếu lại log.
+
+`context_entries` là lịch sử có cấu trúc lấy từ log. Khi dựng request inference, cần áp dụng các sự kiện ngữ cảnh theo hành vi của agent, bổ sung cấu hình runtime có thể khôi phục và đối chiếu token ID với request thực tế. Trường `messages` và `prompt` giữ dạng rút gọn để dùng với extractor cũ khi smoke test. Hai tùy chọn giới hạn lịch sử và byte chỉ áp dụng cho dạng rút gọn.
+
+| Tùy chọn | Mặc định | Ý nghĩa |
+|---|---:|---|
+| `--source` | `omp` | Chọn `omp` hoặc `pi` |
+| `--sessions` | Thư mục session của nguồn đã chọn | Ghi đè đường dẫn log |
+| `--history-messages` | 12 | Số tin nhắn tối đa cho bản rút gọn |
+| `--context-bytes` | 2000 | Ngân sách byte UTF-8 cho prompt một dòng |
+| `--tool-stride` | 4 | Khoảng cách lấy mẫu giữa các lượt AREX-2 cùng một yêu cầu user |
+| `--max-per-turn` | 24 | Số mẫu tối đa trên một yêu cầu user |
+
+File mặc định là `data/cached_states/<source>-arex2-prompts.jsonl`. Crawler tạo file với quyền `0600` và từ chối ghi đè. Rà nội dung riêng trong log, kể cả argument, text và ảnh trả về từ tool, trước khi train hoặc chia sẻ. Chia train, validation và test theo cặp `source` và `session_id` trước khi trích teacher.
 
 ### Định dạng cache
 
@@ -138,6 +165,14 @@ export WARM_START="${MTP_WARM_START_GGUF:-$("$MTP_PYTHON" -c 'import yaml; print
 
 ## Chạy inference và benchmark
 
+Với llama.cpp có hỗ trợ `share_weights_from` cho Qwen35 MTP, thêm
+`--share-target-weights` vào lệnh export và dùng file GGUF mới với
+`-md ... --spec-type draft-mtp` cùng chính GGUF đã truyền vào
+`--target-gguf`. Sidecar giữ decoder MTP, norm và metadata tokenizer.
+Loader mượn `token_embd.weight` và `output.weight` từ model chính. Chế độ
+export này dành cho MTP dùng toàn bộ vocab. Sidecar d2t cần LM head theo
+vocab rút gọn và dùng luồng export d2t.
+
 Các ví dụ chạy trên máy có một MI50. Giữ thư mục lệnh là gốc repo. Chạy lệnh server trong terminal riêng.
 
 ```bash
@@ -176,6 +211,32 @@ curl -fsS --unix-socket "$BENCH_DIR/server.sock" \
 - **Tốc độ sinh** tính bằng tổng `timings.predicted_n` chia tổng `timings.predicted_ms / 1000`. Chỉ số này tính phần decode. Nếu cần đo độ trễ cả request, ghi thêm thời gian prefill và thời gian từ client.
 - **Khớp đầu ra** đối chiếu trường `content` trên từng cặp request greedy. Ghi `stop_type` để phân biệt kết thúc tự nhiên với hết ngân sách token. Kiểm tra chất lượng câu trả lời riêng dựa trên đáp án hoặc tiêu chí đề bài.
 - Khi ghi nhận kết quả, lưu prompt, giới hạn token, seed, bản GGUF, số draft token, build llama.cpp và response JSON. Giữ các điều kiện đó giống nhau khi so sánh.
+
+## Fine-tune thử nghiệm cho chuỗi 2–3 token draft
+
+[Trainer rollout](src/train_rollout.py) bắt đầu từ checkpoint MTP đã train. Bước đầu lấy hidden state từ teacher. Bước sau đưa hidden state do chính MTP vừa sinh trở lại khối, giống đường chạy của một sidecar MTP một khối. Token ID vẫn lấy từ teacher để huấn luyện trên nhánh mà các draft trước đó được chấp nhận. Mỗi bước tính cross-entropy qua LM head đã freeze, và gradient đi qua các bước truyền hidden state.
+
+```bash
+"$MTP_PYTHON" -m src.train_rollout \
+  --cache data/cached_states/teacher.bin \
+  --prompts data/cached_states/teacher.bin.prompts.txt \
+  --teacher "$TEACHER" --init output/teacher_mtp.pt \
+  --output output/rollout_mtp.pt --depth 3 --epochs 4 --learning-rate 3e-6
+```
+
+Mỗi chuỗi chọn tối đa 4 vị trí bắt đầu ngẫu nhiên ở mỗi epoch. Validation dùng tối đa 12 vị trí cố định trên mỗi chuỗi. Chọn checkpoint theo tổng số prefix đúng từ độ dài 2 trở lên, sau đó so số prefix đúng ở độ dài 1 và loss. Xuất checkpoint thử nghiệm bằng lệnh export ở trên với tên GGUF riêng.
+
+Để đo trên llama.cpp, bật `--metrics` và dùng hai snapshot `/metrics` trước và sau cùng một bộ request. Mẫu số là chênh lệch counter `llamacpp:spec_decode_num_drafts_total`. Tử số của `P(chấp nhận ít nhất k token)` là chênh lệch counter `llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position="k-1"}`, với position bắt đầu từ 0. So sánh các bản GGUF ở cùng depth, ngưỡng xác suất, nhiệt độ và KV cache. Ghi cả tốc độ decode để thấy chi phí của các đề xuất dài hơn.
+
+Pilot rollout dùng cùng cache 38 chuỗi train và 7 chuỗi validation. Epoch 2 tăng từ 64 lên 65 prefix đúng ở độ dài 2 và từ 54 lên 55 ở độ dài 3 trên 84 vị trí validation. Trên benchmark runtime gồm 4 prompt mô phỏng tác vụ agent, giới hạn 160 token mỗi prompt, context 32K, Q8_0 KV, `depth=3` và `p_min=0`, bảng dưới đây ghi kết quả ở `temperature=0.7`.
+
+| Q4_0 | Xác minh chấp nhận ≥2 | Xác minh chấp nhận ≥3 | Decode token/s |
+|---|---:|---:|---:|
+| Bản teacher hiện tại | 143/205 (69,8%) | 113/205 (55,1%) | 30,88 |
+| Warm-start Qwen với embedding và LM head AREX-2 | 144/206 (69,9%) | 114/206 (55,3%) | 30,87 |
+| Bản rollout thử nghiệm | 144/208 (69,2%) | 107/208 (51,4%) | 30,25 |
+
+Tỷ lệ validation tăng nhẹ trong pilot này. Bản Q4_0 rollout kém hơn trên các request runtime đã thử. Với greedy, warm-start chấp nhận ít nhất 3 draft token ở 114/203 lượt xác minh (56,2%), so với 107/210 (51,0%) của bản teacher. Ở nhiệt độ 0,7, hai bản gần ngang nhau trên bộ nhỏ này.
 
 ## Kết quả trên MI50
 
@@ -259,6 +320,6 @@ bash -n scripts/run_pipeline.sh
 "$MTP_PYTHON" -m unittest discover -s tests -v
 ```
 
-Bộ test gồm 7 bài, có kiểm tra RoPE split-half, shape forward, warm-start và seed dataset. Kiểm tra toàn tuyến dùng kết quả alignment, validation và benchmark llama.cpp trên model export. [train.py](src/train.py) chứa luồng thử nghiệm lịch sử dùng loss trên biểu diễn, với dữ liệu ngẫu nhiên khi thiếu cache. Dùng [run_pipeline.sh](scripts/run_pipeline.sh) cho bài train teacher-token mô tả ở đây.
+Bộ test gồm 8 bài, có kiểm tra RoPE split-half, shape forward, warm-start, seed dataset và cách rollout đếm prefix đúng. Kiểm tra toàn tuyến dùng kết quả alignment, validation và benchmark llama.cpp trên model export. [train.py](src/train.py) chứa luồng thử nghiệm lịch sử dùng loss trên biểu diễn, với dữ liệu ngẫu nhiên khi thiếu cache. Dùng [run_pipeline.sh](scripts/run_pipeline.sh) cho bài train teacher-token mô tả ở đây.
 
 Khi mở rộng thí nghiệm, tăng số họ prompt theo workload, giữ một tập đánh giá độc lập, lưu checkpoint theo lượt và so warm-start với bản đã train ở cùng số draft token. Pilot hiện tại chủ yếu dùng seed theo chủ đề kỹ thuật, nên tỷ lệ đo được phản ánh đúng các bộ prompt đã chạy.
